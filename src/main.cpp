@@ -3,9 +3,12 @@
 // 原作者：BI6OPR
 // 此版本作者：BG5CVT
 // 在原来的基础上优化了控制代码，修复了自动转向异常的问题
-// Version Code：v0.4
-// 发布时间：2025/01/29
+// Version Code：v0.5
+// 发布时间：2025/02/09
 // 本程序用于控制步进电机，实现Pelco-D控制
+
+// Version 0.5更新日志：
+// 更改信号输出PIN口，以适配v0.5控制底板
 
 // 立春天，风渐暖，伊人一去不复返
 // 献给可爱的小音
@@ -17,13 +20,17 @@
 // 信号灯输出口
 const int LED_MSG_PIN = 13;
 
-// 定义了板上的控制端，4作为水平方位角方向，16作为俯仰角方向
-const int AZ_DIRECTION_PIN = 4;
-const int EL_DIRECTION_PIN = 16;
+// 定义了板上的控制端，26作为水平方位角方向，27作为俯仰角方向
+const int AZ_DIRECTION_PIN = 26;
+const int EL_DIRECTION_PIN = 27;
+// const int AZ_DIRECTION_PIN = 4;
+// const int EL_DIRECTION_PIN = 16;
 
-// 定义了PWM引脚，需要将这个脚接入PUL端，2作为方位角脉冲，15作为俯仰角脉冲
-const int AZ_SPEED_PUL_PIN = 2;
-const int EL_SPEED_PUL_PIN = 15;
+// 定义了PWM引脚，需要将这个脚接入PUL端，25作为方位角脉冲，14作为俯仰角脉冲
+const int AZ_SPEED_PUL_PIN = 25;
+const int EL_SPEED_PUL_PIN = 14;
+// const int AZ_SPEED_PUL_PIN = 2;
+// const int EL_SPEED_PUL_PIN = 15;
 
 // 定义串口接受数据的全局变量
 const int BUFFER_SIZE = 16;
