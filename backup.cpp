@@ -32,9 +32,6 @@ int stepperSpeed = 5; // 初始速度设置为500微秒
 bool is_azcontrol_stepper = false;
 bool is_elcontrol_stepper = false;
 
-bool last_azcontrol_stepper = false;
-bool last_elcontrol_stepper = false;
-
 // 当前指令标志
 int currentCommand = 0;
 
@@ -47,8 +44,10 @@ void handlePelcoDCommand(int command);
 void stepMotor(int pin, bool direction, int speed);
 void printStatus();
 
-bool prev_az_control = false; // 记录 AZ 电机上一次的控制状态
-bool prev_el_control = false; // 记录 EL 电机上一次的控制状态
+// 定义PWM初始变量
+const int PWM_FREQ = 10000;       // PWM 频率（单位：Hz）
+const int PWM_RESOLUTION = 8;    // 分辨率（8 位时，占空比范围 0-255）
+
 
 // TCP 服务器
 WiFiServer server(serverPort);
@@ -81,7 +80,15 @@ void setup()
   // 启动 TCP 服务器
   server.begin();
   Serial.println("TCP Server started");
+
+  // 初始化PWM模块
+  ledcSetup(0 , PWM_FREQ, 8);
+  ledcAttachPin(AZ_SPEED_PUL_PIN, 0);
+
+  ledcSetup(1 , PWM_FREQ, 8);
+  ledcAttachPin(EL_SPEED_PUL_PIN, 1);
 }
+
 
 void readWifiData()
 {
@@ -125,13 +132,28 @@ void loop()
   // 控制步进电机（优先执行）
   if (is_azcontrol_stepper)
   {
-    stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
+    ledcWrite(0, 128);
+    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
+  }
+
+  if (is_azcontrol_stepper == false)
+  {
+    ledcWrite(0, 0);
+    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
   }
 
   if (is_elcontrol_stepper)
   {
-    stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
+    ledcWrite(1, 128);
+    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
   }
+
+  if (is_elcontrol_stepper == false)
+  {
+    ledcWrite(1, 0);
+    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
+  }
+
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= interval)
   {
@@ -234,10 +256,10 @@ void handlePelcoDCommand(int command)
 
 void stepMotor(int pin, bool direction, int speed)
 {
-  digitalWrite(pin, HIGH);
-  delayMicroseconds(speed / 2); // 脉冲宽度
-  digitalWrite(pin, LOW);
-  delayMicroseconds(speed / 2); // 间隔时间
+  // digitalWrite(pin, HIGH);
+  // delayMicroseconds(speed / 2); // 脉冲宽度
+  // digitalWrite(pin, LOW);
+  // delayMicroseconds(speed / 2); // 间隔时间
   // Serial.print("Step on pin "); Serial.print(pin); Serial.print(" direction "); Serial.print(direction ? "Forward" : "Backward"); Serial.print(" speed "); Serial.println(speed); // 调试信息
 }
 
