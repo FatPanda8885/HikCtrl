@@ -1,21 +1,12 @@
-#include <Arduino.h> // 确保包含Arduino核心库
+#include <Arduino.h>
+#include <WiFi.h>
 
-// 原作者：BI6OPR
-// 此版本作者：BG5CVT
-// 在原来的基础上优化了控制代码，修复了自动转向异常的问题
-// Version Code：v0.6 pre1
-// 发布时间：2025/02/09
-// 本程序用于控制步进电机，实现Pelco-D控制
+// WiFi 网络配置
+const char* ssid = "HAMZJ";
+const char* password = "zyyb833833833";
 
-// Version 0.5更新日志：
-// 更改信号输出PIN口，以适配v0.5控制底板
-
-// 立春天，风渐暖，伊人一去不复返
-// 献给可爱的小音
-
-// 业余卫星软件云台参数如下
-// 水平参数：55.5
-// 垂直参数：155.5
+// TCP 服务器端口
+const int serverPort = 80;
 
 // 信号灯输出口
 const int LED_MSG_PIN = 13;
@@ -23,14 +14,10 @@ const int LED_MSG_PIN = 13;
 // 定义了板上的控制端，26作为水平方位角方向，27作为俯仰角方向
 const int AZ_DIRECTION_PIN = 26;
 const int EL_DIRECTION_PIN = 27;
-// const int AZ_DIRECTION_PIN = 4;
-// const int EL_DIRECTION_PIN = 16;
 
 // 定义了PWM引脚，需要将这个脚接入PUL端，25作为方位角脉冲，14作为俯仰角脉冲
 const int AZ_SPEED_PUL_PIN = 25;
 const int EL_SPEED_PUL_PIN = 14;
-// const int AZ_SPEED_PUL_PIN = 2;
-// const int EL_SPEED_PUL_PIN = 15;
 
 // 定义串口接受数据的全局变量
 const int BUFFER_SIZE = 16;
@@ -40,18 +27,16 @@ char buf[BUFFER_SIZE];
 bool az_stepper_direction = false;
 bool el_stepper_direction = false;
 // 步进电机速度,wait ms（间隔时间越小,速度越快）
-int stepperSpeed = 500; // 初始速度设置为500微秒
+int stepperSpeed = 5; // 初始速度设置为500微秒
 // 步进电机控制
 bool is_azcontrol_stepper = false;
 bool is_elcontrol_stepper = false;
 
+bool last_azcontrol_stepper = false;
+bool last_elcontrol_stepper = false;
+
 // 当前指令标志
 int currentCommand = 0;
-
-// 定义PWM初始变量
-const int PWM_FREQ = 10000;       // PWM 频率（单位：Hz）
-const int PWM_RESOLUTION = 8;    // 分辨率（8 位时，占空比范围 0-255）
-
 
 // 定时器变量
 unsigned long previousMillis = 0; // 上一次打印状态的时间
@@ -62,6 +47,13 @@ void handlePelcoDCommand(int command);
 void stepMotor(int pin, bool direction, int speed);
 void printStatus();
 
+bool prev_az_control = false; // 记录 AZ 电机上一次的控制状态
+bool prev_el_control = false; // 记录 EL 电机上一次的控制状态
+
+// TCP 服务器
+WiFiServer server(serverPort);
+
+WiFiClient client;
 void setup()
 {
   // 配置串口:
@@ -76,44 +68,75 @@ void setup()
   // 初始化信号灯
   digitalWrite(LED_MSG_PIN, LOW);
 
-  // 初始化PWM模块
-  ledcSetup(0 , PWM_FREQ, 8);
-  ledcAttachPin(AZ_SPEED_PUL_PIN, 0);
+  // 连接到 WiFi 网络
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 
-  ledcSetup(1 , PWM_FREQ, 8);
-  ledcAttachPin(EL_SPEED_PUL_PIN, 1);
+  // 启动 TCP 服务器
+  server.begin();
+  Serial.println("TCP Server started");
 }
 
-void readSerialData()
+void readWifiData()
 {
-  if (Serial.available() >= 7)
-  {
-    int rlen = Serial.readBytes(buf, 7); // 读取7个字节
-    if (rlen == 7 && buf[0] == 0xFF && buf[1] == 0x01) // 校验Pelco-D命令格式
-    {
-      int command = buf[3];
-      if (command != currentCommand) // 只有在接收到新的命令时才处理
-      {
-        handlePelcoDCommand(command);
-        currentCommand = command; // 更新当前命令
-      }
-
-      // 打印接收到的数据
-      Serial.print("Received command (HEX): ");
-      for (int i = 0; i < rlen; i++)
-      {
-        Serial.print(buf[i], HEX);
-        if (i < rlen - 1)
-        {
-          Serial.print(" ");
+  // 处理客户端连接（非阻塞模式）
+  if (!client) { // 如果没有活跃的客户端
+    client = server.available(); // 检查新连接
+    if (client) {
+      Serial.println("New client connected");
+    }
+  } else { // 处理已连接的客户端
+    if (client.connected() && client.available() >= 7) {
+      int rlen = client.readBytes(buf, 7);
+      if (rlen == 7 && buf[0] == 0xFF && buf[1] == 0x01 && buf[3] != 0x53 && buf[3] != 0x51) {
+        int command = buf[3];
+        if (command != currentCommand) {
+          handlePelcoDCommand(command);
+          currentCommand = command;
         }
+        // 打印接收到的数据（保持原有逻辑）
+        Serial.print("Received command (HEX): ");
+        for (int i = 0; i < rlen; i++) {
+          Serial.print(buf[i], HEX);
+          if (i < rlen - 1) Serial.print(" ");
+        }
+        Serial.println();
+      } else {
+        Serial.println("Invalid command format.");
       }
-      Serial.println();
     }
-    else
-    {
-      Serial.println("Invalid command format.");
+    
+    // 检查客户端是否断开
+    if (!client.connected()) {
+      client.stop();
+      Serial.println("Client disconnected");
     }
+  }
+}
+void loop()
+{
+  readWifiData();
+  // 控制步进电机（优先执行）
+  if (is_azcontrol_stepper)
+  {
+    stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
+  }
+
+  if (is_elcontrol_stepper)
+  {
+    stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
+  }
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval)
+  {
+    previousMillis = currentMillis;
+    printStatus();
   }
 }
 
@@ -128,74 +151,78 @@ void handlePelcoDCommand(int command)
       Serial.println("0000.");
       break;
     case 2: // 右转
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = true; // 水平步进电机正转
       digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
       is_azcontrol_stepper = true;
       Serial.println("0002.");
       break;
     case 4: // 左转
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = false; // 水平步进电机反转
       digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
       is_azcontrol_stepper = true;
       Serial.println("0004.");
       break;
     case 8: // 向上
+      digitalWrite(LED_MSG_PIN, HIGH);
       el_stepper_direction = true; // 俯仰步进电机正转
       digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
       is_elcontrol_stepper = true;
       Serial.println("0008.");
       break;
     case 16: // 向下
+      digitalWrite(LED_MSG_PIN, HIGH);
       el_stepper_direction = false; // 俯仰步进电机反转
       digitalWrite(EL_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
       is_elcontrol_stepper = true;
       Serial.println("0016.");
       break;
-    case 0x0C: //左上
+    case 0x0C: // 左上
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = false; // 水平步进电机反转
       digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
       el_stepper_direction = true; // 俯仰步进电机正转
       digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
+      is_azcontrol_stepper = true;
       is_elcontrol_stepper = true;
       Serial.println("000C.");
       break;
-    case 0x0A: //右上
+    case 0x0A: // 右上
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = true; // 水平步进电机正转
       digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
       el_stepper_direction = true; // 俯仰步进电机正转
       digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
+      is_azcontrol_stepper = true;
       is_elcontrol_stepper = true;
       Serial.println("000A.");
       break;
     case 0x14: // 左下
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = false; // 水平步进电机反转
       digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
       el_stepper_direction = false; // 俯仰步进电机反转
       digitalWrite(EL_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 5; // 步进电机速度
+      is_azcontrol_stepper = true;
       is_elcontrol_stepper = true;
       Serial.println("0014.");
       break;
     case 0x12: // 右下
+      digitalWrite(LED_MSG_PIN, HIGH);
       az_stepper_direction = true; // 水平步进电机正转
       digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
       el_stepper_direction = false; // 俯仰步进电机反转
       digitalWrite(EL_DIRECTION_PIN, LOW);
-      stepperSpeed = 10;
+      stepperSpeed = 5;
+      is_azcontrol_stepper = true;
       is_elcontrol_stepper = true;
       Serial.println("0012.");
       break;
@@ -205,54 +232,13 @@ void handlePelcoDCommand(int command)
   }
 }
 
-void loop()
-{
-  // 读取串口数据
-  readSerialData();
-
-  // 控制步进电机
-  if (is_azcontrol_stepper)
-  {
-    ledcWrite(0, 128);
-    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
-  }
-
-  if (is_azcontrol_stepper == false)
-  {
-    ledcWrite(0, 0);
-    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
-  }
-
-  if (is_elcontrol_stepper)
-  {
-    ledcWrite(1, 128);
-    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
-  }
-
-  if (is_elcontrol_stepper == false)
-  {
-    ledcWrite(1, 0);
-    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
-  }
-  
-  // 打印当前状态
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= interval)
-  {
-    previousMillis = currentMillis;
-    printStatus();
-  }
-}
-
 void stepMotor(int pin, bool direction, int speed)
 {
-
-
-  // digitalWrite(pin, HIGH);
-  // delayMicroseconds(speed / 2); // 脉冲宽度
-  // digitalWrite(pin, LOW);
-  // delayMicroseconds(speed / 2); // 间隔时间
-  // Serial.print("Step on pin "); Serial.print(pin); Serial.print(" direction "); Serial.print(direction); Serial.print(" speed "); Serial.println(speed);
+  digitalWrite(pin, HIGH);
+  delayMicroseconds(speed / 2); // 脉冲宽度
+  digitalWrite(pin, LOW);
+  delayMicroseconds(speed / 2); // 间隔时间
+  // Serial.print("Step on pin "); Serial.print(pin); Serial.print(" direction "); Serial.print(direction ? "Forward" : "Backward"); Serial.print(" speed "); Serial.println(speed); // 调试信息
 }
 
 void printStatus()
