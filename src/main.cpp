@@ -1,4 +1,6 @@
 #include <Arduino.h> // 确保包含Arduino核心库
+#include <EEPROM.h> //引入EEPROM库以便保存角度数据
+#include <cmath>
 
 // 原作者：BI6OPR
 // 此版本作者：BG5CVT
@@ -39,8 +41,10 @@ char buf[BUFFER_SIZE];
 // 步进电机的转动方向
 bool az_stepper_direction = false;
 bool el_stepper_direction = false;
+
 // 步进电机速度,wait ms（间隔时间越小,速度越快）
 int stepperSpeed = 500; // 初始速度设置为500微秒
+
 // 步进电机控制
 bool is_azcontrol_stepper = false;
 bool is_elcontrol_stepper = false;
@@ -58,10 +62,19 @@ unsigned long previousMillis = 0; // 上一次打印状态的时间
 const long interval = 3000; // 打印状态的时间间隔（3秒）
 
 // 声明函数
-void handlePelcoDCommand(int command);
+// void handleCommand(char command);
 void stepMotor(int pin, bool direction, int speed);
 void printStatus();
 
+// 定义角度初始变量
+int az_angle = 000;
+int el_angle = 000;
+unsigned long azLastCalcTime = 0; // 上次计算时间
+const long azCalcInterval = 100;  // 计算间隔：100ms
+unsigned long elLastCalcTime = 0; // 上次计算时间
+const long elCalcInterval = 100;  // 计算间隔：100ms
+float azCurrentAngle = 0.0;
+float elCurrentAngle = 0.0;
 void setup()
 {
   // 配置串口:
@@ -83,130 +96,112 @@ void setup()
   ledcSetup(1 , PWM_FREQ, 8);
   ledcAttachPin(EL_SPEED_PUL_PIN, 1);
 }
-
-void readSerialData()
-{
-  if (Serial.available() >= 7)
-  {
-    int rlen = Serial.readBytes(buf, 7); // 读取7个字节
-    if (rlen == 7 && buf[0] == 0xFF && buf[1] == 0x01) // 校验Pelco-D命令格式
-    {
-      int command = buf[3];
-      if (command != currentCommand) // 只有在接收到新的命令时才处理
-      {
-        handlePelcoDCommand(command);
-        currentCommand = command; // 更新当前命令
-      }
-
-      // 打印接收到的数据
-      Serial.print("Received command (HEX): ");
-      for (int i = 0; i < rlen; i++)
-      {
-        Serial.print(buf[i], HEX);
-        if (i < rlen - 1)
-        {
-          Serial.print(" ");
-        }
-      }
-      Serial.println();
-    }
-    else
-    {
-      Serial.println("Invalid command format.");
-    }
-  }
-}
-
-void handlePelcoDCommand(int command)
-{
-  switch (command)
-  {
-    case 0: // 停止
+void handleStringCommand(String cmd) {
+  if (cmd == "S") {
       digitalWrite(LED_MSG_PIN, LOW);
       is_azcontrol_stepper = false;
       is_elcontrol_stepper = false;
       Serial.println("0000.");
-      break;
-    case 2: // 右转
-      az_stepper_direction = true; // 水平步进电机正转
+  } else if (cmd == "A") {
+      is_azcontrol_stepper = false;
+  } else if (cmd == "E") {
+      is_elcontrol_stepper = false;
+  } else if (cmd == "R") {
+      az_stepper_direction = true;
       digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 10;
       is_azcontrol_stepper = true;
       Serial.println("0002.");
-      break;
-    case 4: // 左转
-      az_stepper_direction = false; // 水平步进电机反转
+  } else if (cmd == "L") {
+      az_stepper_direction = false;
       digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 10;
       is_azcontrol_stepper = true;
       Serial.println("0004.");
-      break;
-    case 8: // 向上
-      el_stepper_direction = true; // 俯仰步进电机正转
+  } else if (cmd == "U") {
+      el_stepper_direction = true;
       digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
+      stepperSpeed = 10;
       is_elcontrol_stepper = true;
       Serial.println("0008.");
-      break;
-    case 16: // 向下
-      el_stepper_direction = false; // 俯仰步进电机反转
-      digitalWrite(EL_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_elcontrol_stepper = true;
-      Serial.println("0016.");
-      break;
-    case 0x0C: //左上
-      az_stepper_direction = false; // 水平步进电机反转
-      digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
-      el_stepper_direction = true; // 俯仰步进电机正转
-      digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_elcontrol_stepper = true;
-      Serial.println("000C.");
-      break;
-    case 0x0A: //右上
-      az_stepper_direction = true; // 水平步进电机正转
-      digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
-      el_stepper_direction = true; // 俯仰步进电机正转
-      digitalWrite(EL_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_elcontrol_stepper = true;
-      Serial.println("000A.");
-      break;
-    case 0x14: // 左下
-      az_stepper_direction = false; // 水平步进电机反转
-      digitalWrite(AZ_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
-      el_stepper_direction = false; // 俯仰步进电机反转
-      digitalWrite(EL_DIRECTION_PIN, LOW);
-      stepperSpeed = 10; // 步进电机速度
-      is_elcontrol_stepper = true;
-      Serial.println("0014.");
-      break;
-    case 0x12: // 右下
-      az_stepper_direction = true; // 水平步进电机正转
-      digitalWrite(AZ_DIRECTION_PIN, HIGH);
-      stepperSpeed = 10; // 步进电机速度
-      is_azcontrol_stepper = true;
-      el_stepper_direction = false; // 俯仰步进电机反转
+  } else if (cmd == "D") {
+      el_stepper_direction = false;
       digitalWrite(EL_DIRECTION_PIN, LOW);
       stepperSpeed = 10;
       is_elcontrol_stepper = true;
-      Serial.println("0012.");
-      break;
-    default:
+      Serial.println("0016.");
+  } else if (cmd == "C") {
+      int az_angle = round(azCurrentAngle);
+      Serial.print("AZ=");
+      Serial.println(az_angle);
+  } else if (cmd == "B") {
+      int el_angle = round(elCurrentAngle);
+      Serial.print("EL=");
+      Serial.println(el_angle);
+  } else if (cmd == "C2") { // ✅ 支持多字符命令
+      int az_angle = round(azCurrentAngle);
+      int el_angle = round(elCurrentAngle);
+      Serial.print("AZ=");
+      Serial.println(az_angle);
+      Serial.print("EL=");
+      Serial.println(el_angle);
+  } else {
       Serial.println("Unknown command.");
-      break;
   }
+}  
+void readSerialData()
+{
+  if (Serial.available() > 0) {
+      Serial.setTimeout(100);
+      String command = Serial.readStringUntil('\n'); // 读取直到换行符
+      command.trim(); // 去除前后空格
+      handleStringCommand(command);
+  }
+}
+
+
+void calculateAngleAZ()
+{
+  // 每调用一次，假设增加一定角度（例如每个脉冲对应 0.1 度）
+  float anglePerStep = 0.1; // 根据你的步进电机 + 减速比 + 编码器设置调整
+  if (az_stepper_direction == true)
+  {
+    azCurrentAngle += anglePerStep;
+  }
+  else
+  {
+    azCurrentAngle -= anglePerStep;
+  }
+
+  // 角度归一化到 [0, 360)
+  if (azCurrentAngle >= 360.0) azCurrentAngle -= 360.0;
+  if (azCurrentAngle < 0.0) azCurrentAngle += 360.0;
+
+}
+
+void calculateAngleEL()
+{
+  // 每调用一次，假设增加一定角度（例如每个脉冲对应 0.1 度）
+  float anglePerStep = 0.1; // 根据你的步进电机 + 减速比 + 编码器设置调整
+  if (el_stepper_direction == true)
+  {
+    elCurrentAngle += anglePerStep;
+  }
+  else
+  {
+    elCurrentAngle -= anglePerStep;
+  }
+
+  // 角度归一化到 [0, 360)
+  if (elCurrentAngle >= 90.0) elCurrentAngle -= 90.0;
+  if (elCurrentAngle < 90.0) elCurrentAngle += 90.0;
+
 }
 
 void loop()
 {
+  unsigned long currentMillis = millis();
+
   // 读取串口数据
   readSerialData();
 
@@ -214,45 +209,35 @@ void loop()
   if (is_azcontrol_stepper)
   {
     ledcWrite(0, 128);
-    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
+    if (currentMillis - azLastCalcTime >= azCalcInterval)
+    {
+      azLastCalcTime = currentMillis; // 更新上次计算时间
+      calculateAngleAZ();              // 执行角度计算函数
+    }
+  
   }
 
   if (is_azcontrol_stepper == false)
   {
     ledcWrite(0, 0);
-    // stepMotor(AZ_SPEED_PUL_PIN, az_stepper_direction, stepperSpeed);
+  
   }
 
   if (is_elcontrol_stepper)
   {
     ledcWrite(1, 128);
-    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
+    if (currentMillis - elLastCalcTime >= elCalcInterval)
+    {
+      elLastCalcTime = currentMillis; // 更新上次计算时间
+      calculateAngleEL();              // 执行角度计算函数
+    }
   }
 
   if (is_elcontrol_stepper == false)
   {
     ledcWrite(1, 0);
-    // stepMotor(EL_SPEED_PUL_PIN, el_stepper_direction, stepperSpeed);
   }
   
-  // 打印当前状态
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= interval)
-  {
-    previousMillis = currentMillis;
-    printStatus();
-  }
-}
-
-void stepMotor(int pin, bool direction, int speed)
-{
-
-
-  // digitalWrite(pin, HIGH);
-  // delayMicroseconds(speed / 2); // 脉冲宽度
-  // digitalWrite(pin, LOW);
-  // delayMicroseconds(speed / 2); // 间隔时间
-  // Serial.print("Step on pin "); Serial.print(pin); Serial.print(" direction "); Serial.print(direction); Serial.print(" speed "); Serial.println(speed);
 }
 
 void printStatus()
@@ -266,3 +251,19 @@ void printStatus()
   Serial.print(", EL Control: ");
   Serial.println(is_elcontrol_stepper ? "On" : "Off");
 }
+
+void set_zero()
+{
+  if(!EEPROM.begin(4096)) //之后替换为串口接收指令
+  {
+    EEPROM.begin(4096);
+    EEPROM.write(4096, (az_angle >> 8) & 0xFF); // 高位字节
+    EEPROM.write(4097, az_angle & 0xFF);       // 低位字节
+    EEPROM.write(4096, (el_angle >> 8) & 0xFF); // 高位字节
+    EEPROM.write(4097, el_angle & 0xFF);       // 低位字节
+  }
+}
+
+// read:
+// int readAngle = (EEPROM.read(4096) << 8) | EEPROM.read(4097);
+
